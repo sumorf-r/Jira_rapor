@@ -1,0 +1,27 @@
+# Sirlar - asla commit etme
+config.py
+*.env
+.env
+
+# Log dosyalari
+*.log
+
+# Olusturulan raporlar
+raporlar/
+yedek/
+
+# Telegram state
+tg_messages.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
