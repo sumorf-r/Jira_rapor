@@ -483,6 +483,18 @@ def jira_webhook():
     debug_dump(f"{event} / {issue_event}", payload)
     log(f"Event: {event}  /  {issue_event}")
 
+    # ---- PROJE WHITELIST FILTRESI -----------------------------------------
+    # Sadece config.PROJECTS'te olan projelerin event'lerini isle.
+    # Issue key'inden proje kodunu cikar (ornek: "GNDFAB-100" -> "GNDFAB")
+    issue = payload.get("issue") or {}
+    issue_key = issue.get("key") or ""
+    proj_code = issue_key.split("-")[0] if "-" in issue_key else ""
+    allowed_projects = set(cfg.PROJECTS)
+    if proj_code and proj_code not in allowed_projects:
+        log(f"  -> Atlandi: {issue_key} ({proj_code} whitelist'te yok)")
+        return jsonify({"sent": False, "reason": "project_not_in_whitelist",
+                        "project": proj_code}), 200
+
     # Event router
     msg = None
     if event == "jira:issue_created":
