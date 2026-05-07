@@ -4,7 +4,7 @@ import urllib.request, urllib.parse, base64, json, random, sys, os
 from datetime import date, datetime
 from collections import defaultdict
 
-# ---- KONFIG (config.py'den) -----------------------------------------------
+# ---- KONFIG ---------------------------------------------------------------
 import sys as _sys
 _sys.path.insert(0, "/opt/jira_rapor")
 import config as _cfg
@@ -13,7 +13,7 @@ JIRA_EMAIL = _cfg.JIRA_EMAIL
 JIRA_BASE  = _cfg.JIRA_BASE
 TG_TOKEN   = _cfg.TG_TOKEN
 TG_CHAT    = _cfg.TG_CHAT
-PROJECTS   = _cfg.PROJECTS
+PROJECTS   = list(_cfg.PROJECTS)
 LOG_FILE = "/opt/jira_rapor/telegram.log"
 
 # ---- HELPERS --------------------------------------------------------------

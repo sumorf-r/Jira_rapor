@@ -3,15 +3,28 @@ config.py
 *.env
 .env
 
+# DuckDNS gercek script (sablonu commit et, gerceginde token var)
+duckdns_update.local.sh
+
 # Log dosyalari
 *.log
 
-# Olusturulan raporlar
+# Olusturulan raporlar / dump'lar
 raporlar/
 yedek/
+arsiv/
+jira_dump_*.json
 
 # Telegram state
 tg_messages.json
+tg_*.json
+
+# Webhook debug dump (gercek issue payload'lari, kvkk)
+jira_webhook_debug.log
+
+# Onizleme dosyalari
+dashboard_preview.png
+*_preview.png
 
 # Python
 __pycache__/

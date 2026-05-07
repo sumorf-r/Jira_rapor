@@ -41,7 +41,7 @@ def fetch_all(project_key):
     """Sayfalama destekli: tum issue'lari donder."""
     fields = ["summary", "status", "assignee", "priority", "issuetype",
               "created", "duedate", "reporter", "labels",
-              "subtasks", "parent", "description", "customfield_10015",
+              "subtasks", "parent", "description", cfg.JIRA_START_DATE_FIELD,
               "resolutiondate"]
     issues = []
     next_token = None
@@ -84,7 +84,7 @@ def issue_to_summary(issue):
         "is_subtask": bool(f.get("parent") or f["issuetype"].get("subtask")),
         "parent": (f.get("parent") or {}).get("key"),
         "duedate": f.get("duedate"),  # ISO format YYYY-MM-DD or None
-        "startdate": f.get("customfield_10015"),
+        "startdate": f.get(cfg.JIRA_START_DATE_FIELD),
         "labels": f.get("labels") or [],
         "resolutiondate": (f.get("resolutiondate") or "")[:10] if f.get("resolutiondate") else None,
     }

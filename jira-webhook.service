@@ -1,0 +1,16 @@
+[Unit]
+Description=Jira Webhook Receiver (Flask)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/jira_rapor
+ExecStart=/usr/bin/python3 /opt/jira_rapor/jira_webhook.py
+Restart=always
+RestartSec=5
+StandardOutput=append:/opt/jira_rapor/jira_webhook_stdout.log
+StandardError=append:/opt/jira_rapor/jira_webhook_stderr.log
+
+[Install]
+WantedBy=multi-user.target

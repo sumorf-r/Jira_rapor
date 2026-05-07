@@ -1,0 +1,16 @@
+# Sabah e-posta raporu (Talha Bey + CC)
+0 8 * * * python3 /opt/jira_rapor/cron_runner.py cron_send.log /opt/jira_rapor/send_report.py
+# Aksam anlik guncel durum (Talha Bey, CC: Yusuf)
+0 18 * * * python3 /opt/jira_rapor/cron_runner.py cron_status.log /opt/jira_rapor/send_status.py
+# Sabah toplu Telegram ozet
+5 8 * * 1-5 python3 /opt/jira_rapor/cron_runner.py cron_notify.log /opt/jira_rapor/telegram_notify.py
+# Aksam toplu Telegram ozet
+30 17 * * 1-5 python3 /opt/jira_rapor/cron_runner.py cron_notify.log /opt/jira_rapor/telegram_notify.py
+# Telegram gorsel dashboard (gunde 3 kere - sabah/oglen/aksam, hafta ici)
+30 9 * * 1-5 python3 /opt/jira_rapor/cron_runner.py cron_visual.log /opt/jira_rapor/telegram_visual.py
+30 13 * * 1-5 python3 /opt/jira_rapor/cron_runner.py cron_visual.log /opt/jira_rapor/telegram_visual.py
+30 16 * * 1-5 python3 /opt/jira_rapor/cron_runner.py cron_visual.log /opt/jira_rapor/telegram_visual.py
+# Haftalik yedek temizligi (30 gunden eski yedekleri sil)
+0 2 * * 0 find /opt/jira_rapor/yedek -type f -mtime +30 -delete
+# DuckDNS IP auto-update (her 5 dk)
+*/5 * * * * /opt/jira_rapor/duckdns_update.sh

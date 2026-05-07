@@ -1,0 +1,12 @@
+# Jira Webhook reverse proxy
+# Caddy otomatik Let's Encrypt SSL alir (ACME challenge)
+
+gnd-jira.duckdns.org {
+    # Saglik: kim ulasiyor logla
+    log {
+        output file /var/log/caddy/access.log
+        format json
+    }
+    # Tum istekleri webhook flask'e ilet
+    reverse_proxy 127.0.0.1:8089
+}

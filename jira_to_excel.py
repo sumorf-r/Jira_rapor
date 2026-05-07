@@ -2,15 +2,18 @@ import urllib.request
 import base64
 import json
 import os
+import sys
 from datetime import datetime, date
 from collections import Counter
 
-import sys as _sys
-_sys.path.insert(0, "/opt/jira_rapor")
-import config as _cfg
-TOKEN    = _cfg.JIRA_TOKEN
-EMAIL    = _cfg.JIRA_EMAIL
-BASE_URL = _cfg.JIRA_BASE
+# Tum sirlar ve sabit degerler config.py'den okunur (DRY + guvenlik).
+sys.path.insert(0, "/opt/jira_rapor")
+import config as cfg
+
+TOKEN    = cfg.JIRA_TOKEN
+EMAIL    = cfg.JIRA_EMAIL
+BASE_URL = cfg.JIRA_BASE
+START_DATE_FIELD = cfg.JIRA_START_DATE_FIELD
 TODAY = date.today()
 
 credentials = base64.b64encode(f"{EMAIL}:{TOKEN}".encode()).decode()
@@ -30,7 +33,7 @@ from openpyxl.comments import Comment
 def fetch_issues(project_key):
     fields = ["summary", "status", "assignee", "priority", "issuetype",
               "created", "duedate", "reporter", "labels",
-              "subtasks", "parent", "description", "customfield_10015"]
+              "subtasks", "parent", "description", START_DATE_FIELD]
     issues_raw = []
     next_token = None
     while True:
@@ -142,7 +145,7 @@ def build_rows(issues):
         late_start_days = None  # Tip 2 geciken: start gecmis ama hala baslanmamis
         if is_done:
             own_due = due_by_key.get(issue["key"])
-            start_dt = parse_date(f.get("customfield_10015"))
+            start_dt = parse_date(f.get(START_DATE_FIELD))
             candidates = [d for d in (own_due, start_dt) if d]
             if candidates:
                 target = max(candidates)
@@ -151,7 +154,7 @@ def build_rows(issues):
         else:
             # Done degil: baslangic gecmis ama henuz baslanmamis mi?
             status_cat = (f["status"].get("statusCategory") or {}).get("key", "")
-            start_dt = parse_date(f.get("customfield_10015"))
+            start_dt = parse_date(f.get(START_DATE_FIELD))
             not_started = (status_cat == "new")
             if not_started and start_dt and start_dt < TODAY:
                 late_start_days = (TODAY - start_dt).days
@@ -181,7 +184,7 @@ def build_rows(issues):
             "Raporlayan":        (f.get("reporter") or {}).get("displayName", ""),
             "Etiketler":         ", ".join(f.get("labels") or []),
             "Oluşturma Tarihi":  format_tr_date(parse_date(f.get("created"))),
-            "Başlangıç Tarihi":  format_tr_date(parse_date(f.get("customfield_10015"))),
+            "Başlangıç Tarihi":  format_tr_date(parse_date(f.get(START_DATE_FIELD))),
             "Son Tarih":         format_tr_date(due_date),
             "Kalan Gün":         remaining,
             "İlerleme":          remaining,
@@ -394,7 +397,7 @@ def write_sheet(wb, sheet_title, rows, header_color="1F4E79"):
             pc.font = Font(bold=True, color="FF6600")
             pc.fill = PatternFill("solid", fgColor="FFEEDD")
         else:
-            MAX_DAYS = 30
+            MAX_DAYS = cfg.PROGRESS_WINDOW_PANO
             ratio = min(max(0, MAX_DAYS - remaining) / MAX_DAYS, 1.0)
             filled = round(ratio * 10)
             bar = "█" * filled + "░" * (10 - filled)
@@ -458,11 +461,11 @@ def write_summary(wb, title, rows, header_color):
 
 # ── Main ────────────────────────────────────────────────────────────────────
 
+# Projeler config.PROJECTS'den, temalar config.PROJECT_THEMES'den.
+# Yeni proje eklemek icin sadece config.py'i guncelle.
 projects = [
-    ("RPA",    "RPA Panosu",    "1F4E79"),
-    ("GNDFAB", "GNDFAB Panosu", "375623"),
-    ("GNDERP", "GNDERP Panosu", "6A1B9A"),
-    ("ODOO",   "ODOO Panosu",   "00838F"),
+    (p, f"{p} Panosu", cfg.PROJECT_THEMES[p]["sheet_color"])
+    for p in cfg.PROJECTS
 ]
 
 wb = openpyxl.Workbook()
@@ -483,11 +486,16 @@ ws_home = wb.create_sheet("Ana Sayfa")
 wb.move_sheet("Ana Sayfa", offset=-len(wb.sheetnames) + 1)
 
 # ---- Card layout (dinamik: kart sayisi/genisligi degistirilebilir) ------
+# Kart konfigurasyonu config.PROJECT_THEMES'den uretilir.
 proj_cfg = {
-    "RPA Panosu":    {"label": "RPA  —  Robotic Process Automation", "accent": "1B3A6B", "btn": "2E75B6", "stat_bg": "EBF2FA", "stat_border": "C5D8F0"},
-    "GNDFAB Panosu": {"label": "GNDFAB  —  Fabrika Yonetimi",        "accent": "1C4220", "btn": "3A7D2C", "stat_bg": "EBF5E8", "stat_border": "BBDDB0"},
-    "GNDERP Panosu": {"label": "GNDERP  —  ERP Entegrasyonu",        "accent": "4A148C", "btn": "8E44AD", "stat_bg": "F3EBF7", "stat_border": "D7BDE2"},
-    "ODOO Panosu":   {"label": "ODOO  —  ERP Modul Gelistirme",      "accent": "006064", "btn": "00ACC1", "stat_bg": "E0F7FA", "stat_border": "B2EBF2"},
+    f"{p} Panosu": {
+        "label":       cfg.PROJECT_THEMES[p]["label"],
+        "accent":      cfg.PROJECT_THEMES[p]["card_accent"],
+        "btn":         cfg.PROJECT_THEMES[p]["card_btn"],
+        "stat_bg":     cfg.PROJECT_THEMES[p]["card_stat_bg"],
+        "stat_border": cfg.PROJECT_THEMES[p]["card_stat_border"],
+    }
+    for p in cfg.PROJECTS
 }
 
 CARD_ROW_START = 8
@@ -539,7 +547,8 @@ for col in range(FIRST_COL, LAST_COL + 1):
 ws_home.row_dimensions[7].height = 14
 
 for card_idx, (sheet_name, (rows, _color)) in enumerate(all_project_rows.items()):
-    cfg = proj_cfg.get(sheet_name, {"label": sheet_name, "accent": "333333", "btn": "555555", "stat_bg": "F5F5F5", "stat_border": "CCCCCC"})
+    # NOT: lokal degisken adi 'card' (modul 'cfg'i golgelemez)
+    card = proj_cfg.get(sheet_name, {"label": sheet_name, "accent": "333333", "btn": "555555", "stat_bg": "F5F5F5", "stat_border": "CCCCCC"})
     cs = CARD_COL_STARTS[card_idx]
     ce = cs + CARD_WIDTH - 1
     r = CARD_ROW_START
@@ -562,24 +571,24 @@ for card_idx, (sheet_name, (rows, _color)) in enumerate(all_project_rows.items()
         ws_home.row_dimensions[row_n].height = 20
         lc = ws_home.cell(row=row_n, column=cs, value=label)
         lc.font = Font(size=10, color="2C3E50", name="Calibri")
-        lc.fill = PatternFill("solid", fgColor=cfg["stat_bg"])
+        lc.fill = PatternFill("solid", fgColor=card["stat_bg"])
         lc.alignment = Alignment(horizontal="left", vertical="center", indent=2)
         ws_home.merge_cells(start_row=row_n, start_column=cs, end_row=row_n, end_column=ce - 2)
 
         vc = ws_home.cell(row=row_n, column=ce - 1, value=value)
         vc.font = Font(size=11, bold=True, color=val_color, name="Calibri")
-        vc.fill = PatternFill("solid", fgColor=cfg["stat_bg"])
+        vc.fill = PatternFill("solid", fgColor=card["stat_bg"])
         vc.alignment = Alignment(horizontal="center", vertical="center")
         ws_home.merge_cells(start_row=row_n, start_column=ce - 1, end_row=row_n, end_column=ce)
 
     # Top accent bar
-    fill_row(r, cfg["accent"], height=5); r += 1
+    fill_row(r, card["accent"], height=5); r += 1
 
     # Project title header
     ws_home.row_dimensions[r].height = 38
-    tc = merged_cell(r, cfg["label"],
+    tc = merged_cell(r, card["label"],
                      Font(bold=True, size=13, color="FFFFFF", name="Calibri"),
-                     cfg["accent"], align_h="left", indent=1)
+                     card["accent"], align_h="left", indent=1)
     # Internal hyperlink — use openpyxl Hyperlink with location
     from openpyxl.worksheet.hyperlink import Hyperlink
     tc.hyperlink = Hyperlink(ref=tc.coordinate, location=f"'{sheet_name}'!A1", tooltip=f"{sheet_name} panosuna git")
@@ -587,7 +596,7 @@ for card_idx, (sheet_name, (rows, _color)) in enumerate(all_project_rows.items()
     r += 1
 
     # Thin divider
-    fill_row(r, cfg["stat_border"], height=3); r += 1
+    fill_row(r, card["stat_border"], height=3); r += 1
 
     # Stats
     total      = len(rows)
@@ -603,28 +612,28 @@ for card_idx, (sheet_name, (rows, _color)) in enumerate(all_project_rows.items()
     stat_row(r, "Toplam Issue",       total,      "1B3A6B"); r += 1
     stat_row(r, "Ana Gorev",          ana,        "1B3A6B"); r += 1
     stat_row(r, "Alt Gorev",          alt,        "1B3A6B"); r += 1
-    fill_row(r, cfg["stat_border"], height=3);               r += 1
+    fill_row(r, card["stat_border"], height=3);               r += 1
     stat_row(r, "Tamamlandi",         tamamlandi, "27AE60"); r += 1
     stat_row(r, "Devam Ediyor",       devam,      "2980B9"); r += 1
     stat_row(r, "Beklemede",          bekleme,    "E67E22"); r += 1
     stat_row(r, "Yapilacaklar",       yapilacak,  "7F8C8D"); r += 1
-    fill_row(r, cfg["stat_border"], height=3);               r += 1
+    fill_row(r, card["stat_border"], height=3);               r += 1
     stat_row(r, "Suresi Gecmis",      gecmis,     "C0392B"); r += 1
     stat_row(r, "Bu Hafta Bitiyor",   bu_hafta,   "D35400"); r += 1
-    fill_row(r, cfg["stat_border"], height=3);               r += 1
+    fill_row(r, card["stat_border"], height=3);               r += 1
 
     # Button row
     ws_home.row_dimensions[r].height = 28
     bc = ws_home.cell(row=r, column=cs, value=">> Panoya Git  (Tiklayin)")
     bc.font = Font(bold=True, size=11, color="FFFFFF", name="Calibri")
-    bc.fill = PatternFill("solid", fgColor=cfg["btn"])
+    bc.fill = PatternFill("solid", fgColor=card["btn"])
     bc.alignment = Alignment(horizontal="center", vertical="center")
     bc.hyperlink = Hyperlink(ref=bc.coordinate, location=f"'{sheet_name}'!A1", tooltip=f"{sheet_name} panosuna git")
     ws_home.merge_cells(start_row=r, start_column=cs, end_row=r, end_column=ce)
     r += 1
 
     # Bottom accent bar
-    fill_row(r, cfg["accent"], height=5); r += 1
+    fill_row(r, card["accent"], height=5); r += 1
 
 ws_home.sheet_view.showGridLines = False
 ws_home.sheet_view.zoomScale = 110
@@ -761,14 +770,10 @@ for item in all_deadlines:
     rfill = PatternFill("solid", fgColor=row_bg)
     ws_road.row_dimensions[row_n].height = 20
 
-    # Proje badge
-    _badge_map = {
-        "RPA":    ("1B3A6B", "D6E4F0"),
-        "GNDFAB": ("1C4220", "D9EAD3"),
-        "GNDERP": ("4A148C", "E8DAEF"),
-        "ODOO":   ("006064", "B2EBF2"),
-    }
-    proj_color, proj_bg = _badge_map.get(proj, ("333333", "EEEEEE"))
+    # Proje badge (config.PROJECT_THEMES'den)
+    _theme = cfg.PROJECT_THEMES.get(proj, {})
+    proj_color = _theme.get("badge_color", "333333")
+    proj_bg    = _theme.get("badge_bg",    "EEEEEE")
     pc = ws_road.cell(row=row_n, column=2, value=proj)
     pc.font = Font(bold=True, size=9, color=proj_color, name="Calibri")
     pc.fill = PatternFill("solid", fgColor=proj_bg)
@@ -863,7 +868,7 @@ for item in all_deadlines:
     elif remaining == 0:
         bar_val, bar_color, bar_bg = "██████████  BUGUN SON GUN!", "FF6600", "FFEEDD"
     else:
-        MAX = 60
+        MAX = cfg.PROGRESS_WINDOW_ROADMAP
         ratio = min(max(0, MAX - remaining) / MAX, 1.0)
         filled = round(ratio * 10)
         bar = "█" * filled + "░" * (10 - filled)
