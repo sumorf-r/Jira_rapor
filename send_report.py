@@ -39,7 +39,7 @@ NAME_OVERRIDES = {
     "burcinaksu":   "Burçin Hanım",
 }
 
-PROJECT_NAMES = ["RPA", "GNDFAB", "GNDERP", "ODOO"]
+PROJECT_NAMES = list(_cfg.PROJECTS)  # config.py'den otomatik (yeni proje eklenince burayi degistirmeye gerek yok)
 
 def hitap_olustur(email_addr):
     user = email_addr.split("@")[0].lower()
