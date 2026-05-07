@@ -257,46 +257,113 @@ def fmt_change_item(item, iss, user):
             f"✏️ Yapan: <b>{html_escape(user)}</b>"
         )
 
-    # ---- DUE DATE (bitis tarihi) — YASAK UYARISI ----
-    if field == "duedate":
-        return (
-            f"{DATE_BAN_HEADER}\n"
-            f"\n"
-            f"📅 <b>BİTİŞ TARİHİ DEĞİŞTİRİLDİ</b>\n"
-            f"\n"
-            f"{header}\n"
-            f"\n"
-            f"   ESKİ:  <i>{html_escape(fromS)}</i>\n"
-            f"   YENİ:  <b>{html_escape(toS)}</b>  ⚠️\n"
-            f"\n"
-            f"👤 Atanan: <b>{html_escape(iss['assignee'])}</b>\n"
-            f"✏️ Bu işlemi yapan: <b>{html_escape(user)}</b>\n"
-            f"\n"
-            f"{DATE_BAN_FOOTER}"
-        )
+    # ---- TARIH FIELD'leri (bitis + baslangic) ----
+    # Iki durum:
+    #   a) Ilk kez set ediliyor (eski deger yok)  -> normal bildirim
+    #   b) Mevcut tarih degistiriliyor             -> YASAK uyarisi
+    raw_from = item.get("fromString")
+    raw_to   = item.get("toString")
+    has_old  = raw_from not in (None, "", "—")
+    has_new  = raw_to   not in (None, "", "—")
+    is_first_set = (not has_old) and has_new
+    is_real_change = has_old and has_new and (raw_from != raw_to)
+    is_cleared   = has_old and (not has_new)
 
-    # ---- START DATE (baslangic tarihi) — YASAK UYARISI ----
+    # ---- DUE DATE (bitis tarihi) ----
+    if field == "duedate":
+        if is_first_set:
+            # Bos alanin doldurulmasi: normal bildirim
+            return (
+                f"📅  <b>BİTİŞ TARİHİ BELİRLENDİ</b>\n"
+                f"\n"
+                f"{header}\n"
+                f"\n"
+                f"   Yeni bitiş tarihi: <b>{html_escape(toS)}</b>\n"
+                f"\n"
+                f"👤 Atanan: <b>{html_escape(iss['assignee'])}</b>\n"
+                f"✏️ Belirleyen: <b>{html_escape(user)}</b>"
+            )
+        if is_cleared:
+            # Tarih kaldirildi: yumusak uyari
+            return (
+                f"⚠️  <b>BİTİŞ TARİHİ KALDIRILDI</b>\n"
+                f"\n"
+                f"{header}\n"
+                f"\n"
+                f"   Eski tarih: <i>{html_escape(fromS)}</i>  →  <b>(temizlendi)</b>\n"
+                f"\n"
+                f"👤 Atanan: <b>{html_escape(iss['assignee'])}</b>\n"
+                f"✏️ Yapan: <b>{html_escape(user)}</b>\n"
+                f"\n"
+                f"<i>Görev tarihi olmadan takip edilemez. Lütfen yeni tarih giriniz.</i>"
+            )
+        if is_real_change:
+            # Mevcut tarih degistirildi: YASAK
+            return (
+                f"{DATE_BAN_HEADER}\n"
+                f"\n"
+                f"📅 <b>BİTİŞ TARİHİ DEĞİŞTİRİLDİ</b>\n"
+                f"\n"
+                f"{header}\n"
+                f"\n"
+                f"   ESKİ:  <i>{html_escape(fromS)}</i>\n"
+                f"   YENİ:  <b>{html_escape(toS)}</b>  ⚠️\n"
+                f"\n"
+                f"👤 Atanan: <b>{html_escape(iss['assignee'])}</b>\n"
+                f"✏️ Bu işlemi yapan: <b>{html_escape(user)}</b>\n"
+                f"\n"
+                f"{DATE_BAN_FOOTER}"
+            )
+        return None  # ayni deger, sessiz
+
+    # ---- START DATE (baslangic tarihi) ----
     is_start_date = (
         fieldId == cfg.JIRA_START_DATE_FIELD
         or fieldId == "customfield_10015"
         or field.lower() in ("start date", "baslangic tarihi", "başlangıç tarihi")
     )
     if is_start_date:
-        return (
-            f"{DATE_BAN_HEADER}\n"
-            f"\n"
-            f"🚀 <b>BAŞLANGIÇ TARİHİ DEĞİŞTİRİLDİ</b>\n"
-            f"\n"
-            f"{header}\n"
-            f"\n"
-            f"   ESKİ:  <i>{html_escape(fromS)}</i>\n"
-            f"   YENİ:  <b>{html_escape(toS)}</b>  ⚠️\n"
-            f"\n"
-            f"👤 Atanan: <b>{html_escape(iss['assignee'])}</b>\n"
-            f"✏️ Bu işlemi yapan: <b>{html_escape(user)}</b>\n"
-            f"\n"
-            f"{DATE_BAN_FOOTER}"
-        )
+        if is_first_set:
+            return (
+                f"🚀  <b>BAŞLANGIÇ TARİHİ BELİRLENDİ</b>\n"
+                f"\n"
+                f"{header}\n"
+                f"\n"
+                f"   Yeni başlangıç tarihi: <b>{html_escape(toS)}</b>\n"
+                f"\n"
+                f"👤 Atanan: <b>{html_escape(iss['assignee'])}</b>\n"
+                f"✏️ Belirleyen: <b>{html_escape(user)}</b>"
+            )
+        if is_cleared:
+            return (
+                f"⚠️  <b>BAŞLANGIÇ TARİHİ KALDIRILDI</b>\n"
+                f"\n"
+                f"{header}\n"
+                f"\n"
+                f"   Eski tarih: <i>{html_escape(fromS)}</i>  →  <b>(temizlendi)</b>\n"
+                f"\n"
+                f"👤 Atanan: <b>{html_escape(iss['assignee'])}</b>\n"
+                f"✏️ Yapan: <b>{html_escape(user)}</b>\n"
+                f"\n"
+                f"<i>Görev tarihi olmadan takip edilemez. Lütfen yeni tarih giriniz.</i>"
+            )
+        if is_real_change:
+            return (
+                f"{DATE_BAN_HEADER}\n"
+                f"\n"
+                f"🚀 <b>BAŞLANGIÇ TARİHİ DEĞİŞTİRİLDİ</b>\n"
+                f"\n"
+                f"{header}\n"
+                f"\n"
+                f"   ESKİ:  <i>{html_escape(fromS)}</i>\n"
+                f"   YENİ:  <b>{html_escape(toS)}</b>  ⚠️\n"
+                f"\n"
+                f"👤 Atanan: <b>{html_escape(iss['assignee'])}</b>\n"
+                f"✏️ Bu işlemi yapan: <b>{html_escape(user)}</b>\n"
+                f"\n"
+                f"{DATE_BAN_FOOTER}"
+            )
+        return None  # ayni deger, sessiz
 
     # ---- PRIORITY ----
     if field == "priority":
