@@ -93,16 +93,24 @@ def issue_short(issue):
         "parent_key": parent_key,
     }
 
-def issue_badge(iss):
-    """Mesaj basligi icin: 'GNDFAB-100 (Ana Gorev)' veya 'GNDFAB-101 [Alt of GNDFAB-100]'"""
+def issue_header(iss):
+    """Cok satirli, gorsel hiyerarsik issue basligi.
+    Donen: [satir1, satir2, satir3?] -> mesaj icine \n ile birlestirilir"""
     key = iss["key"]
     link = f"<a href=\"{jira_url(key)}\">{html_escape(key)}</a>"
+    summary = html_escape(iss["summary"]) if iss.get("summary") else ""
+
+    lines = []
     if iss["is_sub"]:
+        lines.append(f"🎫 {link} · <i>Alt görev</i>")
         if iss["parent_key"]:
             parent_link = f"<a href=\"{jira_url(iss['parent_key'])}\">{html_escape(iss['parent_key'])}</a>"
-            return f"{link}  <i>↳ alt gorev</i> ({parent_link})"
-        return f"{link}  <i>↳ alt gorev</i>"
-    return f"{link}  <b>· ana gorev</b>"
+            lines.append(f"📁 Ana görev: {parent_link}")
+    else:
+        lines.append(f"🎫 {link} · <b>Ana görev</b>")
+    if summary:
+        lines.append(f"📋 {summary}")
+    return "\n".join(lines)
 
 def jira_url(key):
     return f"{cfg.JIRA_BASE}/browse/{key}"
@@ -146,12 +154,14 @@ def fmt_issue_created(payload):
         return None
     user = (payload.get("user") or {}).get("displayName", "—")
     return (
-        f"🆕 <b>Yeni gorev olusturuldu</b>\n"
-        f"{issue_badge(iss)}\n"
-        f"<b>{html_escape(iss['summary'])}</b>\n"
-        f"📋 Tip: {html_escape(iss['type'])}  |  📌 Durum: {html_escape(iss['status'])}\n"
-        f"👤 Atanan: <i>{html_escape(iss['assignee'])}</i>\n"
-        f"✏️ Olusturan: {html_escape(user)}"
+        f"🆕  <b>YENİ GÖREV OLUŞTURULDU</b>\n"
+        f"\n"
+        f"{issue_header(iss)}\n"
+        f"📁 Tip: <i>{html_escape(iss['type'])}</i>\n"
+        f"🎯 Durum: <i>{html_escape(iss['status'])}</i>\n"
+        f"\n"
+        f"👤 Atanan: <b>{html_escape(iss['assignee'])}</b>\n"
+        f"✏️ Oluşturan: <b>{html_escape(user)}</b>"
     )
 
 def fmt_issue_deleted(payload):
@@ -159,12 +169,31 @@ def fmt_issue_deleted(payload):
     if not iss:
         return None
     user = (payload.get("user") or {}).get("displayName", "—")
-    sub_tag = " (alt gorev)" if iss["is_sub"] else ""
+    sub_tag = " · <i>Alt görev</i>" if iss["is_sub"] else " · <b>Ana görev</b>"
     return (
-        f"❌ <b>Gorev silindi</b>{sub_tag}\n"
-        f"{html_escape(iss['key'])} — {html_escape(iss['summary'])}\n"
-        f"Silen: {html_escape(user)}"
+        f"❌  <b>GÖREV SİLİNDİ</b>\n"
+        f"\n"
+        f"🎫 {html_escape(iss['key'])}{sub_tag}\n"
+        f"📋 {html_escape(iss['summary'])}\n"
+        f"\n"
+        f"✏️ Silen: <b>{html_escape(user)}</b>"
     )
+
+# Tarih yasak uyarisi sablon basligi/altligi (her iki tarih degisiminde kullanilir)
+DATE_BAN_HEADER = (
+    "🚫━━━━━━━━━━━━━━━━━━━━━━━━━━━━🚫\n"
+    "  ⚠️  <b>TARİH DEĞİŞTİRMEK YASAK</b>  ⚠️\n"
+    "🚫━━━━━━━━━━━━━━━━━━━━━━━━━━━━🚫"
+)
+DATE_BAN_FOOTER = (
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    "⚠️ <i>Tarihler proje planına göre belirlendi.</i>\n"
+    "<i>Onaylanmadan tarih değişikliği yapılmamalı.</i>\n"
+    "\n"
+    "<i>Lütfen tarihi eski haline çeviriniz veya</i>\n"
+    "<i>gerekçesini bildiriniz.</i>\n"
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+)
 
 # changelog.items[] icindeki bir item'i cumleye cevir
 def fmt_change_item(item, iss, user):
@@ -173,84 +202,151 @@ def fmt_change_item(item, iss, user):
     fromS = item.get("fromString") or "—"
     toS   = item.get("toString")   or "—"
 
-    badge = issue_badge(iss)
+    header = issue_header(iss)
 
     # ---- STATUS ----
     if field == "status":
-        emoji = "🔄"
         tcat = (toS or "").lower()
-        if "tamam" in tcat or "done" in tcat or "kapal" in tcat:
-            emoji = "✅"
-        elif "iptal" in tcat or "cancel" in tcat:
-            emoji = "❌"
-        elif "bekle" in tcat or "block" in tcat:
-            emoji = "⏸️"
-        elif "devam" in tcat or "progress" in tcat:
-            emoji = "▶️"
-        return (f"{emoji} <b>Durum degisikligi</b>\n"
-                f"{badge}\n"
-                f"{html_escape(iss['summary'])}\n"
-                f"<i>{html_escape(fromS)}</i> → <b>{html_escape(toS)}</b>\n"
-                f"👤 {html_escape(iss['assignee'])}  |  ✏️ {html_escape(user)}")
+        is_done   = "tamam" in tcat or "done" in tcat or "kapal" in tcat
+        is_cancel = "iptal" in tcat or "cancel" in tcat
+        is_wait   = "bekle" in tcat or "block" in tcat
+        is_prog   = "devam" in tcat or "progress" in tcat
+
+        if is_done:
+            title = "✅  <b>GÖREV TAMAMLANDI</b>"
+            new_label = "<b>✓ " + html_escape(toS) + "</b>"
+            footer = "\n\n🎉 <i>Eline sağlık!</i>"
+        elif is_cancel:
+            title = "❌  <b>GÖREV İPTAL EDİLDİ</b>"
+            new_label = "<b>" + html_escape(toS) + "</b>"
+            footer = ""
+        elif is_wait:
+            title = "⏸️  <b>GÖREV BEKLEMEYE ALINDI</b>"
+            new_label = "<b>" + html_escape(toS) + "</b>"
+            footer = ""
+        elif is_prog:
+            title = "▶️  <b>GÖREV BAŞLATILDI</b>"
+            new_label = "<b>" + html_escape(toS) + "</b>"
+            footer = ""
+        else:
+            title = "🔄  <b>DURUM DEĞİŞTİ</b>"
+            new_label = "<b>" + html_escape(toS) + "</b>"
+            footer = ""
+
+        return (
+            f"{title}\n"
+            f"\n"
+            f"{header}\n"
+            f"\n"
+            f"   <i>{html_escape(fromS)}</i>  →  {new_label}\n"
+            f"\n"
+            f"👤 Atanan: <b>{html_escape(iss['assignee'])}</b>\n"
+            f"✏️ Yapan: <b>{html_escape(user)}</b>"
+            f"{footer}"
+        )
 
     # ---- ASSIGNEE ----
     if field == "assignee":
-        return (f"👤 <b>Atanan degisti</b>\n"
-                f"{badge}\n"
-                f"{html_escape(iss['summary'])}\n"
-                f"<i>{html_escape(fromS)}</i> → <b>{html_escape(toS)}</b>\n"
-                f"✏️ {html_escape(user)}")
+        return (
+            f"👤  <b>ATANAN DEĞİŞTİ</b>\n"
+            f"\n"
+            f"{header}\n"
+            f"\n"
+            f"   <i>{html_escape(fromS)}</i>  →  <b>{html_escape(toS)}</b>\n"
+            f"\n"
+            f"✏️ Yapan: <b>{html_escape(user)}</b>"
+        )
 
-    # ---- DUE DATE (bitis tarihi) ----
+    # ---- DUE DATE (bitis tarihi) — YASAK UYARISI ----
     if field == "duedate":
-        return (f"📅 <b>Bitis tarihi degisti</b>\n"
-                f"{badge}\n"
-                f"{html_escape(iss['summary'])}\n"
-                f"<i>{html_escape(fromS)}</i> → <b>{html_escape(toS)}</b>\n"
-                f"✏️ {html_escape(user)}")
+        return (
+            f"{DATE_BAN_HEADER}\n"
+            f"\n"
+            f"📅 <b>BİTİŞ TARİHİ DEĞİŞTİRİLDİ</b>\n"
+            f"\n"
+            f"{header}\n"
+            f"\n"
+            f"   ESKİ:  <i>{html_escape(fromS)}</i>\n"
+            f"   YENİ:  <b>{html_escape(toS)}</b>  ⚠️\n"
+            f"\n"
+            f"👤 Atanan: <b>{html_escape(iss['assignee'])}</b>\n"
+            f"✏️ Bu işlemi yapan: <b>{html_escape(user)}</b>\n"
+            f"\n"
+            f"{DATE_BAN_FOOTER}"
+        )
 
-    # ---- START DATE (baslangic tarihi) — customfield_10015 ----
-    # Jira "field" olarak "Start date" (veya yerel cevirisi) gosterebilir,
-    # fieldId ise "customfield_10015". Iki yontemi de yakala.
+    # ---- START DATE (baslangic tarihi) — YASAK UYARISI ----
     is_start_date = (
         fieldId == cfg.JIRA_START_DATE_FIELD
         or fieldId == "customfield_10015"
         or field.lower() in ("start date", "baslangic tarihi", "başlangıç tarihi")
     )
     if is_start_date:
-        return (f"🚀 <b>Baslangic tarihi degisti</b>\n"
-                f"{badge}\n"
-                f"{html_escape(iss['summary'])}\n"
-                f"<i>{html_escape(fromS)}</i> → <b>{html_escape(toS)}</b>\n"
-                f"✏️ {html_escape(user)}")
+        return (
+            f"{DATE_BAN_HEADER}\n"
+            f"\n"
+            f"🚀 <b>BAŞLANGIÇ TARİHİ DEĞİŞTİRİLDİ</b>\n"
+            f"\n"
+            f"{header}\n"
+            f"\n"
+            f"   ESKİ:  <i>{html_escape(fromS)}</i>\n"
+            f"   YENİ:  <b>{html_escape(toS)}</b>  ⚠️\n"
+            f"\n"
+            f"👤 Atanan: <b>{html_escape(iss['assignee'])}</b>\n"
+            f"✏️ Bu işlemi yapan: <b>{html_escape(user)}</b>\n"
+            f"\n"
+            f"{DATE_BAN_FOOTER}"
+        )
 
     # ---- PRIORITY ----
     if field == "priority":
-        return (f"⚡ <b>Oncelik degisti</b>\n"
-                f"{badge}\n"
-                f"{html_escape(iss['summary'])}\n"
-                f"<i>{html_escape(fromS)}</i> → <b>{html_escape(toS)}</b>")
+        return (
+            f"⚡  <b>ÖNCELİK DEĞİŞTİ</b>\n"
+            f"\n"
+            f"{header}\n"
+            f"\n"
+            f"   <i>{html_escape(fromS)}</i>  →  <b>{html_escape(toS)}</b>\n"
+            f"\n"
+            f"✏️ Yapan: <b>{html_escape(user)}</b>"
+        )
 
     # ---- SUMMARY (baslik) ----
     if field == "summary":
-        return (f"✏️ <b>Baslik degisti</b>\n"
-                f"{badge}\n"
-                f"<i>{truncate(html_escape(fromS), 80)}</i>\n→\n"
-                f"<b>{truncate(html_escape(toS), 80)}</b>")
+        return (
+            f"✏️  <b>BAŞLIK DEĞİŞTİ</b>\n"
+            f"\n"
+            f"🎫 <a href=\"{jira_url(iss['key'])}\">{html_escape(iss['key'])}</a>"
+            f"{' · <i>Alt görev</i>' if iss['is_sub'] else ' · <b>Ana görev</b>'}\n"
+            f"\n"
+            f"   ESKİ: <i>{truncate(html_escape(fromS), 80)}</i>\n"
+            f"   YENİ: <b>{truncate(html_escape(toS), 80)}</b>\n"
+            f"\n"
+            f"✏️ Yapan: <b>{html_escape(user)}</b>"
+        )
 
     # ---- LABELS ----
     if field == "labels":
-        return (f"🏷️ <b>Etiket degisti</b>\n"
-                f"{badge}\n"
-                f"{html_escape(iss['summary'])}\n"
-                f"<i>{html_escape(fromS)}</i> → <b>{html_escape(toS)}</b>")
+        return (
+            f"🏷️  <b>ETİKET DEĞİŞTİ</b>\n"
+            f"\n"
+            f"{header}\n"
+            f"\n"
+            f"   <i>{html_escape(fromS) or '(boş)'}</i>  →  <b>{html_escape(toS) or '(boş)'}</b>\n"
+            f"\n"
+            f"✏️ Yapan: <b>{html_escape(user)}</b>"
+        )
 
     # ---- PARENT (alt gorev parent'i degistirildi) ----
     if field in ("Parent", "parent"):
-        return (f"🔗 <b>Ana gorev (parent) degisti</b>\n"
-                f"{badge}\n"
-                f"{html_escape(iss['summary'])}\n"
-                f"<i>{html_escape(fromS)}</i> → <b>{html_escape(toS)}</b>")
+        return (
+            f"🔗  <b>ANA GÖREV (parent) DEĞİŞTİ</b>\n"
+            f"\n"
+            f"{header}\n"
+            f"\n"
+            f"   <i>{html_escape(fromS)}</i>  →  <b>{html_escape(toS)}</b>\n"
+            f"\n"
+            f"✏️ Yapan: <b>{html_escape(user)}</b>"
+        )
 
     # Diger field'lar -> sessiz (worklog, time tracking, vb. spam yapma)
     return None
@@ -288,10 +384,12 @@ def fmt_comment_created(payload):
         body_text = str(body or "")
     body_text = truncate(body_text, 200)
     return (
-        f"💬 <b>Yeni yorum</b>\n"
-        f"{issue_badge(iss)}\n"
-        f"{html_escape(iss['summary'])}\n"
-        f"👤 {html_escape(author)}: <i>{html_escape(body_text)}</i>"
+        f"💬  <b>YENİ YORUM</b>\n"
+        f"\n"
+        f"{issue_header(iss)}\n"
+        f"\n"
+        f"👤 <b>{html_escape(author)}</b> yazdı:\n"
+        f"<i>\"{html_escape(body_text)}\"</i>"
     )
 
 # ---- Routes ---------------------------------------------------------------
@@ -329,10 +427,9 @@ def jira_webhook():
     elif event == "comment_created":
         msg = fmt_comment_created(payload)
     elif event == "comment_updated":
-        # spam yapmamak icin ayni format ama "Yorum guncellendi"
         m = fmt_comment_created(payload)
         if m:
-            msg = m.replace("💬 <b>Yeni yorum</b>", "✏️ <b>Yorum guncellendi</b>")
+            msg = m.replace("💬  <b>YENİ YORUM</b>", "✏️  <b>YORUM GÜNCELLENDİ</b>")
     # diger event'leri sessizce gec (worklog vs)
 
     if msg:
