@@ -11,7 +11,7 @@ JIRA_EMAIL = _cfg.JIRA_EMAIL
 JIRA_BASE  = _cfg.JIRA_BASE
 TG_TOKEN   = _cfg.TG_TOKEN
 TG_CHAT    = _cfg.TG_CHAT
-PROJECTS   = list(_cfg.PROJECTS)
+PROJECTS   = _cfg.PROJECTS
 LOG_FILE = "/opt/jira_rapor/telegram_nag.log"
 
 # ---- UYUZ MUDUR LAFLARI ---------------------------------------------------

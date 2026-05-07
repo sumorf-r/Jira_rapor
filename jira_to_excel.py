@@ -8,8 +8,8 @@ from collections import Counter
 import sys as _sys
 _sys.path.insert(0, "/opt/jira_rapor")
 import config as _cfg
-TOKEN = _cfg.JIRA_TOKEN
-EMAIL = _cfg.JIRA_EMAIL
+TOKEN    = _cfg.JIRA_TOKEN
+EMAIL    = _cfg.JIRA_EMAIL
 BASE_URL = _cfg.JIRA_BASE
 TODAY = date.today()
 
@@ -28,29 +28,50 @@ from openpyxl.comments import Comment
 # ── helpers ────────────────────────────────────────────────────────────────
 
 def fetch_issues(project_key):
-    payload = json.dumps({
-        "jql": f"project={project_key} ORDER BY key ASC",
-        "maxResults": 500,
-        "fields": ["summary", "status", "assignee", "priority", "issuetype",
-                   "created", "duedate", "reporter", "labels",
-                   "subtasks", "parent", "description", "customfield_10015",
-                   "resolutiondate"]
-    }).encode("utf-8")
-    req = urllib.request.Request(
-        f"{BASE_URL}/rest/api/3/search/jql",
-        data=payload, headers=req_headers, method="POST"
-    )
-    with urllib.request.urlopen(req) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
-    issues_raw = data.get("issues", [])
+    fields = ["summary", "status", "assignee", "priority", "issuetype",
+              "created", "duedate", "reporter", "labels",
+              "subtasks", "parent", "description", "customfield_10015"]
+    issues_raw = []
+    next_token = None
+    while True:
+        body = {
+            "jql": f"project={project_key} ORDER BY key ASC",
+            "maxResults": 500,
+            "fields": fields,
+        }
+        if next_token:
+            body["nextPageToken"] = next_token
+        payload = json.dumps(body).encode("utf-8")
+        req = urllib.request.Request(
+            f"{BASE_URL}/rest/api/3/search/jql",
+            data=payload, headers=req_headers, method="POST"
+        )
+        with urllib.request.urlopen(req) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        issues_raw.extend(data.get("issues", []))
+        if data.get("isLast", True):
+            break
+        next_token = data.get("nextPageToken")
+        if not next_token:
+            break
 
     # Build ordered list: parent immediately followed by its subtasks (board order)
     issue_map = {i["key"]: i for i in issues_raw}
     children_map = {}
+    # 1) Classic subtasks: parent's "subtasks" field
     for i in issues_raw:
         subs = i["fields"].get("subtasks", [])
         if subs:
             children_map[i["key"]] = [s["key"] for s in subs]
+    # 2) Next-gen child issues: child's "parent" field (may not appear in
+    #    parent's subtasks list, so we must also scan from the child side)
+    for i in issues_raw:
+        parent_info = i["fields"].get("parent")
+        if parent_info:
+            pk = parent_info["key"]
+            children_map.setdefault(pk, [])
+            if i["key"] not in children_map[pk]:
+                children_map[pk].append(i["key"])
 
     ordered = []
     for i in issues_raw:
@@ -112,29 +133,6 @@ def build_rows(issues):
     for issue in issues:
         f = issue["fields"]
         is_sub = bool(f.get("parent") or f["issuetype"].get("subtask"))
-        is_done = (f["status"].get("statusCategory") or {}).get("key") == "done"
-        # Erken bitirme tespiti: durum Tamam ve max(due, start) > TODAY ise erken
-        # Tip 1: bitis tarihi gelecekte (due > today) - bitisten once bitirildi
-        # Tip 2: baslangic tarihi gelecekte (start > today) - baslamadan once bitirildi
-        early_days = None
-        late_start_days = None  # Tip 2 geciken: start gecmis ama hala baslanmamis
-        if is_done:
-            own_due = due_by_key.get(issue["key"])
-            start_dt = parse_date(f.get("customfield_10015"))
-            candidates = [d for d in (own_due, start_dt) if d]
-            if candidates:
-                target = max(candidates)
-                if target > TODAY:
-                    early_days = (target - TODAY).days
-        else:
-            # Done degil: baslangic gecmis ama henuz baslanmamis mi?
-            status_name = f["status"]["name"]
-            status_cat  = (f["status"].get("statusCategory") or {}).get("key", "")
-            start_dt = parse_date(f.get("customfield_10015"))
-            # statusCategory "new" = To Do (yapilmamis), "indeterminate" = In Progress, "done" = Done
-            not_started = (status_cat == "new")
-            if not_started and start_dt and start_dt < TODAY:
-                late_start_days = (TODAY - start_dt).days
         due_date = parse_date(f.get("duedate"))
         remaining = days_remaining(due_date)
         desc_text = ""
@@ -167,9 +165,6 @@ def build_rows(issues):
             "Bekleme Açıklaması": desc_text,
             "_subtask":          is_sub,
             "_date_conflict":    date_conflict,
-            "_done":             is_done,
-            "_early_days":       early_days,
-            "_late_start_days":  late_start_days,
         })
     return rows
 
@@ -205,17 +200,10 @@ HEADER_COMMENTS = {
 }
 STATUS_COLORS = {
     "Yapılacaklar": "FFF2CC",
-    "Yapılacak":    "FFF2CC",
-    "Yapılacak1":   "FFF2CC",
-    "To Do":        "FFF2CC",
-    "Devam Ediyor": "DEEAF1",
-    "In Progress":  "DEEAF1",
-    "Tamamlandı":   "E2EFDA",
-    "Tamam":        "E2EFDA",
-    "Done":         "E2EFDA",
-    "Beklemede":    "FCE4D6",
-    "İptal Edildi": "F2F2F2",
-    "Iptal":        "F2F2F2",
+    "Devam Ediyor":  "DEEAF1",
+    "Tamamlandı":    "E2EFDA",
+    "Beklemede":     "FCE4D6",
+    "İptal Edildi":  "F2F2F2"
 }
 THIN = Side(style="thin", color="BBBBBB")
 BORDER = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
@@ -246,13 +234,8 @@ def write_sheet(wb, sheet_title, rows, header_color="1F4E79"):
     for row_idx, row_data in enumerate(rows, 2):
         status = row_data["Durum"]
         is_sub = row_data["_subtask"]
-        is_done = row_data.get("_done", False)
-        early_days = row_data.get("_early_days")
-        is_early = early_days is not None and early_days > 0
-        late_start_days = row_data.get("_late_start_days")
-        is_late_start = late_start_days is not None and late_start_days > 0
         conflict = row_data.get("_date_conflict", False)
-        row_color = "E2EFDA" if is_done else STATUS_COLORS.get(status, "FFFFFF")
+        row_color = STATUS_COLORS.get(status, "FFFFFF")
         fill = PatternFill("solid", fgColor=row_color)
         conflict_fill = PatternFill("solid", fgColor="FF0000")
         conflict_fill_light = PatternFill("solid", fgColor="FFB3B3")
@@ -297,22 +280,7 @@ def write_sheet(wb, sheet_title, rows, header_color="1F4E79"):
                     cell.font = Font(bold=True, color="000000", size=11)
 
             elif col_name == "Kalan Gün":
-                if is_early:
-                    cell.value = f"{early_days} gun erken"
-                    cell.font = Font(bold=True, color="0D47A1")
-                    cell.fill = PatternFill("solid", fgColor="BBDEFB")
-                    cell.alignment = Alignment(horizontal="center", vertical="center")
-                elif is_done:
-                    cell.value = "Tamamlandi"
-                    cell.font = Font(bold=True, color="1E7D32")
-                    cell.fill = PatternFill("solid", fgColor="E2EFDA")
-                    cell.alignment = Alignment(horizontal="center", vertical="center")
-                elif is_late_start and remaining is None:
-                    cell.value = f"{late_start_days} gun baslanmadi"
-                    cell.font = Font(bold=True, color="E65100")
-                    cell.fill = PatternFill("solid", fgColor="FFE0B2")
-                    cell.alignment = Alignment(horizontal="center", vertical="center")
-                elif remaining is None:
+                if remaining is None:
                     cell.value = "—"
                     cell.alignment = Alignment(horizontal="center", vertical="center")
                 elif remaining < 0:
@@ -358,19 +326,7 @@ def write_sheet(wb, sheet_title, rows, header_color="1F4E79"):
         pc = ws.cell(row=row_idx, column=PROG_COL)
         pc.border = BORDER
         pc.alignment = Alignment(horizontal="left", vertical="center")
-        if is_early:
-            pc.value = f"{early_days} GUN ERKEN BITIRILDI"
-            pc.font = Font(bold=True, color="0D47A1")
-            pc.fill = PatternFill("solid", fgColor="BBDEFB")
-        elif is_done:
-            pc.value = "TAMAMLANDI"
-            pc.font = Font(bold=True, color="1E7D32")
-            pc.fill = PatternFill("solid", fgColor="E2EFDA")
-        elif is_late_start and remaining is None:
-            pc.value = f"!! {late_start_days} GUN ONCE BASLAMALIYDI"
-            pc.font = Font(bold=True, color="E65100")
-            pc.fill = PatternFill("solid", fgColor="FFE0B2")
-        elif remaining is None:
+        if remaining is None:
             pc.value = "Tarih yok"
             pc.font = Font(color="AAAAAA", italic=True)
             pc.fill = PatternFill("solid", fgColor="F5F5F5")
@@ -450,8 +406,6 @@ def write_summary(wb, title, rows, header_color):
 projects = [
     ("RPA",    "RPA Panosu",    "1F4E79"),
     ("GNDFAB", "GNDFAB Panosu", "375623"),
-    ("GNDERP", "GNDERP Panosu", "6A1B9A"),
-    ("ODOO",   "ODOO Panosu",   "00838F"),
 ]
 
 wb = openpyxl.Workbook()
@@ -474,13 +428,13 @@ wb.move_sheet("Ana Sayfa", offset=-len(wb.sheetnames) + 1)
 BG = "F7F9FC"
 for r in range(1, 80):
     ws_home.row_dimensions[r].height = 16
-    for col in range(1, 31):
+    for col in range(1, 25):
         ws_home.cell(row=r, column=col).fill = PatternFill("solid", fgColor=BG)
 
 # Column layout
 ws_home.column_dimensions["A"].width = 2
 ws_home.column_dimensions["B"].width = 2
-for ltr in ["C","D","E","F","G","H","I","J","K","L","M","N","O","P","Q","R","S","T","U","V","W","X","Y","Z","AA","AB","AC"]:
+for ltr in ["C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N"]:
     ws_home.column_dimensions[ltr].width = 5
 
 # ---- Header banner ----
@@ -488,14 +442,14 @@ ws_home.row_dimensions[2].height = 6
 ws_home.row_dimensions[3].height = 52
 ws_home.row_dimensions[4].height = 6
 
-for col in range(3, 30):
+for col in range(3, 23):
     ws_home.cell(row=3, column=col).fill = PatternFill("solid", fgColor="1B3A6B")
 
 h = ws_home.cell(row=3, column=3, value="  GUNDOGDU GIDA  —  JIRA PROJE PANOLARI")
 h.font = Font(bold=True, size=18, color="FFFFFF", name="Calibri")
 h.fill = PatternFill("solid", fgColor="1B3A6B")
 h.alignment = Alignment(horizontal="left", vertical="center")
-ws_home.merge_cells("C3:AC3")
+ws_home.merge_cells("C3:V3")
 
 ws_home.row_dimensions[5].height = 22
 dt = ws_home.cell(row=5, column=3, value=f"Rapor Tarihi:  {datetime.now().strftime('%d %B %Y  —  %H:%M')}")
@@ -504,7 +458,7 @@ dt.alignment = Alignment(horizontal="left", vertical="center")
 ws_home.merge_cells("C5:N5")
 
 ws_home.row_dimensions[6].height = 4
-for col in range(3, 30):
+for col in range(3, 23):
     ws_home.cell(row=6, column=col).fill = PatternFill("solid", fgColor="2E75B6")
 ws_home.row_dimensions[7].height = 14
 
@@ -512,13 +466,11 @@ ws_home.row_dimensions[7].height = 14
 proj_cfg = {
     "RPA Panosu":    {"label": "RPA  —  Robotic Process Automation", "accent": "1B3A6B", "btn": "2E75B6", "stat_bg": "EBF2FA", "stat_border": "C5D8F0"},
     "GNDFAB Panosu": {"label": "GNDFAB  —  Fabrika Yonetimi",        "accent": "1C4220", "btn": "3A7D2C", "stat_bg": "EBF5E8", "stat_border": "BBDDB0"},
-    "GNDERP Panosu": {"label": "GNDERP  —  ERP Entegrasyonu",        "accent": "4A148C", "btn": "8E44AD", "stat_bg": "F3EBF7", "stat_border": "D7BDE2"},
-    "ODOO Panosu":   {"label": "ODOO  —  ERP Modul Gelistirme",      "accent": "006064", "btn": "00ACC1", "stat_bg": "E0F7FA", "stat_border": "B2EBF2"},
 }
 
 CARD_ROW_START = 8
-CARD_COL_STARTS = [3, 10, 17, 24]   # four cards side by side
-CARD_WIDTH = 6                       # columns wide
+CARD_COL_STARTS = [3, 13]   # two cards side by side, col C and col M
+CARD_WIDTH = 9               # columns wide
 
 for card_idx, (sheet_name, (rows, _color)) in enumerate(all_project_rows.items()):
     cfg = proj_cfg.get(sheet_name, {"label": sheet_name, "accent": "333333", "btn": "555555", "stat_bg": "F5F5F5", "stat_border": "CCCCCC"})
@@ -575,7 +527,7 @@ for card_idx, (sheet_name, (rows, _color)) in enumerate(all_project_rows.items()
     total      = len(rows)
     ana        = sum(1 for x in rows if not x["_subtask"])
     alt        = sum(1 for x in rows if x["_subtask"])
-    tamamlandi = sum(1 for x in rows if x.get("_done"))
+    tamamlandi = sum(1 for x in rows if x["Durum"] == "Tamamlandi" or "Tamamland" in x["Durum"])
     devam      = sum(1 for x in rows if x["Durum"] == "Devam Ediyor")
     bekleme    = sum(1 for x in rows if x["Durum"] == "Beklemede")
     yapilacak  = sum(1 for x in rows if x["Durum"] == "Yapilacaklar" or "Yap" in x["Durum"])
@@ -619,7 +571,7 @@ wb.move_sheet("Yol Haritasi", offset=-(len(wb.sheetnames) - 2))  # after Ana Say
 # Collect all issues with due dates from both projects
 all_deadlines = []
 for sheet_name, (rows, _) in all_project_rows.items():
-    proj_label = sheet_name.split()[0]  # "RPA Panosu" -> "RPA"
+    proj_label = "RPA" if "RPA" in sheet_name else "GNDFAB"
     for r in rows:
         if r["Son Tarih"]:
             try:
@@ -664,9 +616,8 @@ for col in range(2, 11):
     ws_road.cell(row=4, column=col).fill = PatternFill("solid", fgColor="2E75B6")
 
 ws_road.row_dimensions[5].height = 22
-proj_counts_str = "   ".join(f"{p[0]}: {sum(1 for x in all_deadlines if x['_proj']==p[0])}" for p in projects)
 info = ws_road.cell(row=5, column=2,
-    value=f"Bugün: {TODAY.strftime('%d.%m.%Y')}   |   Tarihli görev sayısı: {len(all_deadlines)}   |   {proj_counts_str}")
+    value=f"Bugün: {TODAY.strftime('%d.%m.%Y')}   |   Tarihli görev sayısı: {len(all_deadlines)}   |   RPA: {sum(1 for x in all_deadlines if x['_proj']=='RPA')}   GNDFAB: {sum(1 for x in all_deadlines if x['_proj']=='GNDFAB')}")
 info.font = Font(size=10, color="5A6A85", italic=True, name="Calibri")
 info.alignment = Alignment(horizontal="left", vertical="center")
 ws_road.merge_cells("B5:J5")
@@ -707,11 +658,6 @@ for item in all_deadlines:
     proj = item["_proj"]
     remaining = item["İlerleme"]
     is_sub = item["_subtask"]
-    is_done_item = item.get("_done", False)
-    early_days_item = item.get("_early_days")
-    is_early_item = early_days_item is not None and early_days_item > 0
-    late_start_item = item.get("_late_start_days")
-    is_late_start_item = late_start_item is not None and late_start_item > 0
     status = item["Durum"]
 
     # Month separator
@@ -730,13 +676,7 @@ for item in all_deadlines:
         row_n += 1
 
     # Row background
-    if is_early_item:
-        row_bg = "BBDEFB"
-    elif is_done_item:
-        row_bg = "E2EFDA"
-    elif is_late_start_item:
-        row_bg = "FFE0B2"
-    elif remaining is not None and remaining < 0:
+    if remaining is not None and remaining < 0:
         row_bg = "FFE8E8"
     elif remaining is not None and remaining <= 7:
         row_bg = "FFF4E0"
@@ -747,13 +687,8 @@ for item in all_deadlines:
     ws_road.row_dimensions[row_n].height = 20
 
     # Proje badge
-    PROJ_COLORS = {
-        "RPA":    ("1B3A6B", "D6E4F0"),
-        "GNDFAB": ("1C4220", "D9EAD3"),
-        "GNDERP": ("4A148C", "E8DAEF"),
-        "ODOO":   ("006064", "B2EBF2"),
-    }
-    proj_color, proj_bg = PROJ_COLORS.get(proj, ("333333", "EEEEEE"))
+    proj_color = "1B3A6B" if proj == "RPA" else "1C4220"
+    proj_bg    = "D6E4F0" if proj == "RPA" else "D9EAD3"
     pc = ws_road.cell(row=row_n, column=2, value=proj)
     pc.font = Font(bold=True, size=9, color=proj_color, name="Calibri")
     pc.fill = PatternFill("solid", fgColor=proj_bg)
@@ -781,17 +716,9 @@ for item in all_deadlines:
         "Yapılacaklar": ("7F6000","FFF2CC"),
         "Devam Ediyor": ("1F4E79","DEEAF1"),
         "Tamamlandı":   ("1E4620","E2EFDA"),
-        "Tamam":        ("1E4620","E2EFDA"),
         "Beklemede":    ("7B3400","FCE4D6"),
     }
-    if is_early_item:
-        df, db = ("0D47A1", "BBDEFB")
-    elif is_done_item:
-        df, db = ("1E4620", "E2EFDA")
-    elif is_late_start_item:
-        df, db = ("E65100", "FFE0B2")
-    else:
-        df, db = durum_colors.get(status, ("333333","F5F5F5"))
+    df, db = durum_colors.get(status, ("333333","F5F5F5"))
     dc = ws_road.cell(row=row_n, column=5, value=status)
     dc.font = Font(bold=True, size=9, color=df, name="Calibri")
     dc.fill = PatternFill("solid", fgColor=db)
@@ -813,13 +740,7 @@ for item in all_deadlines:
     tc.border = BORDER2
 
     # Kalan Gün
-    if is_early_item:
-        kalan_val, kalan_color, kalan_bg = f"{early_days_item} gun erken", "0D47A1", "BBDEFB"
-    elif is_done_item:
-        kalan_val, kalan_color, kalan_bg = "Tamamlandi", "1E7D32", "E2EFDA"
-    elif is_late_start_item:
-        kalan_val, kalan_color, kalan_bg = f"{late_start_item} gun baslanmadi", "E65100", "FFE0B2"
-    elif remaining is None:
+    if remaining is None:
         kalan_val, kalan_color, kalan_bg = "—", "888888", row_bg
     elif remaining < 0:
         kalan_val, kalan_color, kalan_bg = f"Gecti! ({abs(remaining)} gun)", "CC0000", "FFD0D0"
@@ -841,13 +762,7 @@ for item in all_deadlines:
     kgc.border = BORDER2
 
     # Zaman Çubuğu
-    if is_early_item:
-        bar_val, bar_color, bar_bg = f"██████████  {early_days_item} GUN ERKEN", "0D47A1", "BBDEFB"
-    elif is_done_item:
-        bar_val, bar_color, bar_bg = "██████████  TAMAMLANDI", "1E7D32", "E2EFDA"
-    elif is_late_start_item:
-        bar_val, bar_color, bar_bg = f"!! {late_start_item} GUN BASLAMADI", "E65100", "FFE0B2"
-    elif remaining is None:
+    if remaining is None:
         bar_val, bar_color, bar_bg = "Tarih yok", "AAAAAA", "F5F5F5"
     elif remaining < 0:
         bar_val, bar_color, bar_bg = "██████████  SURESI DOLDU", "CC0000", "FFD0D0"
